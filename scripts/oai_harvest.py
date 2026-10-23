@@ -1,18 +1,28 @@
 #!/usr/bin/env python3
 """
-Harvest metadata from UNI ScholarWorks (bepress Digital Commons) via OAI-PMH
-and write a dated CSV snapshot.
+Harvest metadata from an OAI-PMH endpoint and write a dated CSV snapshot.
+Used for UNI ScholarWorks (Digital Commons) and ArchivesSpace.
 
 Usage:
-    python harvest.py                          # full harvest, oai_dc
-    python harvest.py --prefix dcq             # qualified Dublin Core
-    python harvest.py --set publication:etd    # one set only
-    python harvest.py --list-sets              # print available sets and exit
-    python harvest.py --keep 12                # keep only the 12 newest snapshots
+    python scripts/oai_harvest.py --base-url URL --name NAME [options]
 
-Output:
-    snapshots/scholarworks_<prefix>_<YYYY-MM-DD>.csv   dated snapshot
-    snapshots/latest_<prefix>.csv                      copy of the newest snapshot
+Examples:
+    # ScholarWorks (Digital Commons)
+    python scripts/oai_harvest.py --name scholarworks \\
+        --base-url https://scholarworks.uni.edu/do/oai/ --out-dir scholarworks/snapshots
+    # ArchivesSpace
+    python scripts/oai_harvest.py --name archivesspace \\
+        --base-url https://aspace.library.uni.edu:8082 --out-dir archivesspace/snapshots
+
+Options:
+    --prefix dcq / oai_dcterms ...   another metadata format (default oai_dc)
+    --set SETSPEC                    one OAI set only
+    --list-formats / --list-sets     print what the endpoint offers and exit
+    --keep 4                         keep only the 4 newest dated snapshots
+
+Output (in --out-dir):
+    <name>_<prefix>_<YYYY-MM-DD>.csv   dated snapshot
+    latest_<prefix>.csv                copy of the newest snapshot
 """
 from __future__ import annotations
 
@@ -20,6 +30,7 @@ import argparse
 import csv
 import datetime as dt
 import os
+import re
 import shutil
 import sys
 import time
@@ -29,7 +40,6 @@ from pathlib import Path
 
 import requests
 
-DEFAULT_BASE_URL = "https://scholarworks.uni.edu/do/oai/"
 USER_AGENT = (
     "RodLibrary-Metadata-Harvester/1.0 "
     "(+https://github.com/rodlibrary/Metadata)"
@@ -41,6 +51,10 @@ SEP = " || "  # joins repeated values (e.g. multiple creators) in one cell
 # Columns that always come first, in this order. Any other metadata element
 # found in the harvest is appended after these, alphabetically.
 BASE_COLUMNS = ["oai_identifier", "datestamp", "setSpec", "deleted"]
+# Added after BASE_COLUMNS only when some record has it (ArchivesSpace does;
+# Digital Commons does not), e.g. "resource" or "archival_object".
+RECORD_TYPE_RE = re.compile(
+    r"/(resources|archival_objects|digital_objects|accessions|agents|subjects)/")
 DC_ORDER = [
     "title", "creator", "contributor", "date", "description", "subject",
     "type", "format", "identifier", "source", "publisher", "language",
@@ -137,6 +151,10 @@ def parse_record(rec) -> OrderedDict:
     row["datestamp"] = [header.findtext("oai:datestamp", "", NS).strip()]
     row["setSpec"] = [s.text.strip() for s in header.findall("oai:setSpec", NS) if s.text]
     row["deleted"] = ["true" if header.get("status") == "deleted" else "false"]
+    m = RECORD_TYPE_RE.search(row["oai_identifier"][0])
+    if m:
+        # "archival_objects" -> "archival_object", "accessions" -> "accession"
+        row["record_type"] = [m.group(1)[:-1]]
 
     md = rec.find("oai:metadata", NS)
     if md is not None and len(md):
@@ -155,6 +173,14 @@ def parse_record(rec) -> OrderedDict:
 # --------------------------------------------------------------------------
 # Main tasks
 # --------------------------------------------------------------------------
+def list_formats(session, base_url):
+    root = oai_request(session, base_url, {"verb": "ListMetadataFormats"})
+    check_oai_error(root)
+    for f in root.iter(f"{{{OAI_NS}}}metadataFormat"):
+        print(f"{f.findtext('oai:metadataPrefix', '', NS)}\t"
+              f"{f.findtext('oai:metadataNamespace', '', NS)}")
+
+
 def list_sets(session, base_url):
     for container in paged(session, base_url, "ListSets", {}):
         for s in container.findall("oai:set", NS):
@@ -180,6 +206,8 @@ def column_order(rows):
     for r in rows:
         seen.update(r.keys())
     cols = list(BASE_COLUMNS)
+    if "record_type" in seen:
+        cols.append("record_type")
     cols += [c for c in DC_ORDER if c in seen and c not in cols]
     cols += sorted(seen - set(cols))
     return cols
@@ -196,10 +224,10 @@ def write_csv(rows, path: Path):
     return cols
 
 
-def prune(out_dir: Path, prefix: str, keep: int):
+def prune(out_dir: Path, name: str, prefix: str, keep: int):
     if keep <= 0:
         return
-    snaps = sorted(out_dir.glob(f"scholarworks_{prefix}_*.csv"))
+    snaps = sorted(out_dir.glob(f"{name}_{prefix}_*.csv"))
     for old in snaps[:-keep]:
         print(f"  removing old snapshot {old.name}", file=sys.stderr)
         old.unlink()
@@ -215,7 +243,9 @@ def write_step_summary(text: str):
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--base-url", default=DEFAULT_BASE_URL)
+    p.add_argument("--base-url", required=True, help="OAI-PMH endpoint")
+    p.add_argument("--name", default="oai",
+                   help="short name used in snapshot file names, e.g. archivesspace")
     p.add_argument("--prefix", default="oai_dc", help="metadataPrefix (oai_dc, dcq, ...)")
     p.add_argument("--set", dest="set_spec", help="limit to one OAI set")
     p.add_argument("--from", dest="from_date", help="only records changed since YYYY-MM-DD")
@@ -226,10 +256,14 @@ def main(argv=None):
     p.add_argument("--include-deleted", action="store_true",
                    help="keep records the repository reports as deleted")
     p.add_argument("--list-sets", action="store_true")
+    p.add_argument("--list-formats", action="store_true")
     args = p.parse_args(argv)
 
     session = make_session()
 
+    if args.list_formats:
+        list_formats(session, args.base_url)
+        return 0
     if args.list_sets:
         list_sets(session, args.base_url)
         return 0
@@ -249,15 +283,21 @@ def main(argv=None):
 
     today = dt.date.today().isoformat()
     out_dir = Path(args.out_dir)
-    snap = out_dir / f"scholarworks_{args.prefix}_{today}.csv"
+    snap = out_dir / f"{args.name}_{args.prefix}_{today}.csv"
     cols = write_csv(rows, snap)
     shutil.copyfile(snap, out_dir / f"latest_{args.prefix}.csv")
-    prune(out_dir, args.prefix, args.keep)
+    prune(out_dir, args.name, args.prefix, args.keep)
 
     msg = (f"Wrote {len(rows)} records, {len(cols)} columns to {snap}"
            f" ({n_deleted} deleted records {'kept' if args.include_deleted else 'skipped'})")
+    types = {}
+    for r in rows:
+        if r.get("record_type"):
+            types[r["record_type"]] = types.get(r["record_type"], 0) + 1
+    if types:
+        msg += ". By type: " + ", ".join(f"{k} {v}" for k, v in sorted(types.items()))
     print(msg, file=sys.stderr)
-    write_step_summary(f"### ScholarWorks harvest {today}\n\n{msg}")
+    write_step_summary(f"### {args.name} harvest {today}\n\n{msg}")
     return 0
 
 

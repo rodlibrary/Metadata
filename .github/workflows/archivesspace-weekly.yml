@@ -1,0 +1,50 @@
+name: Weekly ArchivesSpace metadata snapshot
+
+on:
+  schedule:
+    # Mondays at 12:00 UTC (7:00 AM Central during daylight time, 6:00 AM in winter)
+    - cron: "0 12 * * 1"
+  workflow_dispatch: {}   # lets you run it by hand from the Actions tab
+
+permissions:
+  contents: write         # needed to commit the new CSV
+
+concurrency:
+  group: metadata-snapshot-commit   # shared by all harvest workflows so commits never collide
+  cancel-in-progress: false
+
+jobs:
+  harvest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Harvest OAI-PMH metadata
+        run: >
+          python scripts/oai_harvest.py
+          --name archivesspace
+          --base-url https://aspace.library.uni.edu:8082
+          --prefix oai_dc
+          --out-dir archivesspace/snapshots
+          --keep 4
+
+      - name: Commit snapshot
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898333+github-actions[bot]@users.noreply.github.com"
+          git add -A archivesspace/snapshots/
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Weekly ArchivesSpace metadata snapshot $(date -u +%Y-%m-%d)"
+            git pull --rebase origin "${GITHUB_REF_NAME}"
+            git push
+          fi
