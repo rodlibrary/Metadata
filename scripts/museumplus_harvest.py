@@ -368,5 +368,23 @@ def main(argv=None):
     return 0
 
 
+def run_with_annotations():
+    """Run main(); on failure also emit a GitHub Actions ::error:: annotation so the
+    reason shows on the run's summary page, not only in the step log."""
+    def annotate(msg):
+        if os.environ.get("GITHUB_ACTIONS"):
+            msg = str(msg).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+            print(f"::error title=Harvest failed::{msg}", flush=True)
+    try:
+        return main()
+    except SystemExit as e:
+        if e.code not in (None, 0) and not isinstance(e.code, int):
+            annotate(e.code)
+        raise
+    except Exception as e:  # unexpected errors: annotate, then show the traceback
+        annotate(f"{type(e).__name__}: {e}")
+        raise
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(run_with_annotations())
