@@ -5,7 +5,8 @@ Metadata exports from Rod Library systems, including Digital Commons, ArchivesSp
 
 - [`scholarworks/`](scholarworks/): weekly CSV snapshots of UNI ScholarWorks (Digital Commons) metadata, harvested automatically over OAI-PMH.
 - [`archivesspace/`](archivesspace/): weekly CSV snapshots of ArchivesSpace collection and component metadata, harvested automatically over OAI-PMH.
-- [`scripts/oai_harvest.py`](scripts/oai_harvest.py): the shared OAI-PMH harvester used by both.
+- [`preservica/`](preservica/): weekly CSV snapshots of Preservica folder and asset metadata, harvested over OAI-PMH (needs a Preservica login; see its README for setup).
+- [`scripts/oai_harvest.py`](scripts/oai_harvest.py): the shared OAI-PMH harvester used by all three.
 
 ## How the snapshots are made
 

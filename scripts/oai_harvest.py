@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Harvest metadata from an OAI-PMH endpoint and write a dated CSV snapshot.
-Used for UNI ScholarWorks (Digital Commons) and ArchivesSpace.
+Used for UNI ScholarWorks (Digital Commons), ArchivesSpace and Preservica.
 
 Usage:
     python scripts/oai_harvest.py --base-url URL --name NAME [options]
@@ -13,12 +13,17 @@ Examples:
     # ArchivesSpace
     python scripts/oai_harvest.py --name archivesspace \\
         --base-url https://aspace.library.uni.edu:8082 --out-dir archivesspace/snapshots
+    # Preservica (needs a Preservica login; see preservica/README.md)
+    python scripts/oai_harvest.py --name preservica --auth preservica \\
+        --base-url https://<server>.preservica.com/OAI-PMH --out-dir preservica/snapshots
 
 Options:
     --prefix dcq / oai_dcterms ...   another metadata format (default oai_dc)
     --set SETSPEC                    one OAI set only
     --list-formats / --list-sets     print what the endpoint offers and exit
     --keep 4                         keep only the 4 newest dated snapshots
+    --auth preservica                log in first, using PRESERVICA_USERNAME,
+                                     PRESERVICA_PASSWORD and PRESERVICA_TENANT
 
 Output (in --out-dir):
     <name>_<prefix>_<YYYY-MM-DD>.csv   dated snapshot
@@ -71,10 +76,66 @@ def make_session() -> requests.Session:
     return s
 
 
+class PreservicaAuth:
+    """Logs in to Preservica's Access Token API and keeps a fresh token on the session.
+
+    Preservica's OAI-PMH Data Provider needs a 'Preservica-Access-Token' header.
+    Tokens last 15 minutes, so a new one is fetched every 10 minutes and after any 401.
+    Credentials come from PRESERVICA_USERNAME, PRESERVICA_PASSWORD and (for hosted
+    multi-tenant servers) PRESERVICA_TENANT environment variables.
+    """
+    HEADER = "Preservica-Access-Token"
+    MAX_AGE = 600  # seconds
+
+    def __init__(self, login_url):
+        self.login_url = login_url
+        self.username = os.environ.get("PRESERVICA_USERNAME", "")
+        self.password = os.environ.get("PRESERVICA_PASSWORD", "")
+        self.tenant = os.environ.get("PRESERVICA_TENANT", "")
+        if not (self.username and self.password):
+            raise SystemExit("PRESERVICA_USERNAME and PRESERVICA_PASSWORD must be set "
+                             "to harvest from Preservica.")
+        self.obtained = None  # monotonic time of last login
+
+    def login(self, session):
+        data = {"username": self.username, "password": self.password}
+        if self.tenant:
+            data["tenant"] = self.tenant
+        r = session.post(self.login_url, data=data, timeout=60,
+                         headers={"Accept": "application/json"})
+        if r.status_code != 200:
+            try:
+                reason = r.json().get("message", "")
+            except ValueError:
+                reason = r.text[:200]
+            raise SystemExit(f"Preservica login failed (HTTP {r.status_code}): {reason}")
+        token = r.json().get("token")
+        if not token:
+            raise SystemExit("Preservica login returned no token.")
+        session.headers[self.HEADER] = token
+        self.obtained = time.monotonic()
+        print("  logged in to Preservica", file=sys.stderr)
+
+    def ensure(self, session, force=False):
+        if force or self.obtained is None or time.monotonic() - self.obtained > self.MAX_AGE:
+            self.login(session)
+
+
+def default_login_url(base_url):
+    """https://host/anything -> https://host/api/accesstoken/login"""
+    from urllib.parse import urlsplit
+    u = urlsplit(base_url)
+    return f"{u.scheme}://{u.netloc}/api/accesstoken/login"
+
+
 def oai_request(session, base_url, params, max_retries=6, timeout=120):
     """GET an OAI-PMH response, retrying on 503/429/5xx and network errors."""
     delay = 10
+    auth = getattr(session, "oai_auth", None)
+    relogged = False
     for attempt in range(1, max_retries + 1):
+        if auth:
+            auth.ensure(session)
         try:
             r = session.get(base_url, params=params, timeout=timeout)
         except requests.RequestException as exc:
@@ -87,6 +148,12 @@ def oai_request(session, base_url, params, max_retries=6, timeout=120):
 
         if r.status_code == 200:
             return ET.fromstring(r.content)
+
+        if r.status_code in (401, 403) and auth and not relogged:
+            print(f"  HTTP {r.status_code}; logging in again", file=sys.stderr)
+            auth.ensure(session, force=True)
+            relogged = True
+            continue
 
         if r.status_code in (429, 500, 502, 503, 504) and attempt < max_retries:
             wait = r.headers.get("Retry-After")
@@ -257,9 +324,15 @@ def main(argv=None):
                    help="keep records the repository reports as deleted")
     p.add_argument("--list-sets", action="store_true")
     p.add_argument("--list-formats", action="store_true")
+    p.add_argument("--auth", choices=["none", "preservica"], default="none",
+                   help="log in before harvesting (preservica reads PRESERVICA_* env vars)")
+    p.add_argument("--login-url",
+                   help="Preservica login URL (default: <server>/api/accesstoken/login)")
     args = p.parse_args(argv)
 
     session = make_session()
+    if args.auth == "preservica":
+        session.oai_auth = PreservicaAuth(args.login_url or default_login_url(args.base_url))
 
     if args.list_formats:
         list_formats(session, args.base_url)
