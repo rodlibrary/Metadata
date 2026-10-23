@@ -1,0 +1,77 @@
+name: Weekly Preservica metadata snapshot
+
+on:
+  schedule:
+    # Mondays at 13:00 UTC (8:00 AM Central during daylight time, 7:00 AM in winter)
+    - cron: "0 13 * * 1"
+  workflow_dispatch: {}   # lets you run it by hand from the Actions tab
+
+permissions:
+  contents: write         # needed to commit the new CSV
+
+concurrency:
+  group: metadata-snapshot-commit   # shared by all harvest workflows so commits never collide
+  cancel-in-progress: false
+
+# Preservica's OAI-PMH service requires a login. Configure in
+# Settings -> Secrets and variables -> Actions:
+#   Variables: PRESERVICA_OAI_URL  e.g. https://us.preservica.com/OAI-PMH
+#              PRESERVICA_TENANT   your tenant ID (hosted Preservica only)
+#   Secrets:   PRESERVICA_USERNAME, PRESERVICA_PASSWORD  (a read-only account)
+env:
+  PRESERVICA_OAI_URL: ${{ vars.PRESERVICA_OAI_URL }}
+  PRESERVICA_TENANT: ${{ vars.PRESERVICA_TENANT }}
+  PRESERVICA_USERNAME: ${{ secrets.PRESERVICA_USERNAME }}
+  PRESERVICA_PASSWORD: ${{ secrets.PRESERVICA_PASSWORD }}
+
+jobs:
+  harvest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Check Preservica settings
+        id: config
+        run: |
+          if [ -z "$PRESERVICA_OAI_URL" ] || [ -z "$PRESERVICA_USERNAME" ] || [ -z "$PRESERVICA_PASSWORD" ]; then
+            echo "::warning::Preservica harvest skipped: set the PRESERVICA_OAI_URL variable and PRESERVICA_USERNAME / PRESERVICA_PASSWORD secrets (see preservica/README.md)."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.config.outputs.ready == 'true'
+
+      - uses: actions/setup-python@v5
+        if: steps.config.outputs.ready == 'true'
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        if: steps.config.outputs.ready == 'true'
+        run: pip install -r requirements.txt
+
+      - name: Harvest OAI-PMH metadata
+        if: steps.config.outputs.ready == 'true'
+        run: >
+          python scripts/oai_harvest.py
+          --name preservica
+          --auth preservica
+          --base-url "$PRESERVICA_OAI_URL"
+          --prefix oai_dc
+          --out-dir preservica/snapshots
+          --keep 4
+
+      - name: Commit snapshot
+        if: steps.config.outputs.ready == 'true'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898333+github-actions[bot]@users.noreply.github.com"
+          git add -A preservica/snapshots/
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Weekly Preservica metadata snapshot $(date -u +%Y-%m-%d)"
+            git pull --rebase origin "${GITHUB_REF_NAME}"
+            git push
+          fi
