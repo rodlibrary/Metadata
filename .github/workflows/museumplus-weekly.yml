@@ -1,0 +1,86 @@
+name: Weekly MuseumPlus metadata snapshot
+
+on:
+  schedule:
+    # Mondays at 14:00 UTC (9:00 AM Central during daylight time, 8:00 AM in winter)
+    - cron: "0 14 * * 1"
+  workflow_dispatch:
+    inputs:
+      inspect:
+        description: "Inspect only: list field names and publication flags, write no CSV"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write         # needed to commit the new CSV
+
+concurrency:
+  group: metadata-snapshot-commit   # shared by all harvest workflows so commits never collide
+  cancel-in-progress: false
+
+# MuseumPlus is harvested through its API (it has no OAI-PMH). Configure in
+# Settings -> Secrets and variables -> Actions:
+#   Secrets:   MUSEUMPLUS_USERNAME, MUSEUMPLUS_PASSWORD, MUSEUMPLUS_API_KEY
+#   Variables: MUSEUMPLUS_REQUIRE        publication filter, e.g. ObjPublicationGrp.PublicationVoc=Yes
+#              MUSEUMPLUS_API_KEY_HEADER (optional) header name for the API key, if your host needs one
+# Until MUSEUMPLUS_REQUIRE is set, runs are inspect-only and commit nothing.
+env:
+  MUSEUMPLUS_URL: https://mpcedarfallsuni.zetcom.app
+  MUSEUMPLUS_USERNAME: ${{ secrets.MUSEUMPLUS_USERNAME }}
+  MUSEUMPLUS_PASSWORD: ${{ secrets.MUSEUMPLUS_PASSWORD }}
+  MUSEUMPLUS_API_KEY: ${{ secrets.MUSEUMPLUS_API_KEY }}
+  MUSEUMPLUS_API_KEY_HEADER: ${{ vars.MUSEUMPLUS_API_KEY_HEADER }}
+  MUSEUMPLUS_REQUIRE: ${{ vars.MUSEUMPLUS_REQUIRE }}
+
+jobs:
+  harvest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Choose mode
+        id: mode
+        run: |
+          if [ "${{ inputs.inspect }}" = "true" ] || [ -z "$MUSEUMPLUS_REQUIRE" ]; then
+            echo "mode=inspect" >> "$GITHUB_OUTPUT"
+            echo "::notice::Inspect run: field names and publication flags are in the run summary. Nothing will be committed."
+          else
+            echo "mode=harvest" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Inspect MuseumPlus fields
+        if: steps.mode.outputs.mode == 'inspect'
+        run: python scripts/museumplus_harvest.py --base-url "$MUSEUMPLUS_URL" --inspect
+
+      - name: Harvest MuseumPlus objects
+        if: steps.mode.outputs.mode == 'harvest'
+        run: >
+          python scripts/museumplus_harvest.py
+          --base-url "$MUSEUMPLUS_URL"
+          --module Object
+          --require "$MUSEUMPLUS_REQUIRE"
+          --fields-file museumplus/fields.txt
+          --out-dir museumplus/snapshots
+          --keep 4
+
+      - name: Commit snapshot
+        if: steps.mode.outputs.mode == 'harvest'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898333+github-actions[bot]@users.noreply.github.com"
+          git add -A museumplus/snapshots/
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Weekly MuseumPlus metadata snapshot $(date -u +%Y-%m-%d)"
+            git pull --rebase origin "${GITHUB_REF_NAME}"
+            git push
+          fi

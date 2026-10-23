@@ -1,0 +1,22 @@
+# Fields written to the public MuseumPlus CSV, in column order. One field path per line.
+# Only list fields that are already public on https://collections.uni.edu/
+# Run the workflow in inspect mode to see the field paths your MuseumPlus actually uses,
+# then edit this list. Paths that don't exist are reported in the run summary.
+#
+#   FieldName               top-level field
+#   VocName / RefName       vocabulary or linked record (display values)
+#   GroupName.FieldName     field inside a repeatable group
+#
+# Starting point: common MuseumPlus (zetcom standard) object fields.
+__id
+__lastModified
+ObjObjectNumberTxt
+ObjObjectTitleGrp.TitleTxt
+ObjPerAssociationRef
+ObjDateGrp.DateTxt
+ObjMaterialTechniqueGrp.ExportClb
+ObjDimAllGrp.PreviewENVrt
+ObjCreditLineVoc
+ObjCategoryVoc
+ObjClassificationVoc
+ObjBriefDescriptionClb
