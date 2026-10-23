@@ -163,7 +163,8 @@ def oai_request(session, base_url, params, max_retries=6, timeout=120):
             delay = min(delay * 2, 300)
             continue
 
-        r.raise_for_status()
+        raise SystemExit(f"OAI-PMH request to {base_url} failed: HTTP {r.status_code} "
+                         f"{' '.join(r.text.split())[:300]}")
     raise RuntimeError("unreachable")
 
 
@@ -351,8 +352,7 @@ def main(argv=None):
         rows = [r for r in rows if r.get("deleted") != "true"]
 
     if not rows:
-        print("No records harvested; not writing a snapshot.", file=sys.stderr)
-        return 1
+        raise SystemExit("No records harvested; not writing a snapshot.")
 
     today = dt.date.today().isoformat()
     out_dir = Path(args.out_dir)
@@ -374,5 +374,23 @@ def main(argv=None):
     return 0
 
 
+def run_with_annotations():
+    """Run main(); on failure also emit a GitHub Actions ::error:: annotation so the
+    reason shows on the run's summary page, not only in the step log."""
+    def annotate(msg):
+        if os.environ.get("GITHUB_ACTIONS"):
+            msg = str(msg).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+            print(f"::error title=Harvest failed::{msg}", flush=True)
+    try:
+        return main()
+    except SystemExit as e:
+        if e.code not in (None, 0) and not isinstance(e.code, int):
+            annotate(e.code)
+        raise
+    except Exception as e:  # unexpected errors: annotate, then show the traceback
+        annotate(f"{type(e).__name__}: {e}")
+        raise
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(run_with_annotations())
