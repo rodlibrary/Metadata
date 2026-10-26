@@ -1,0 +1,51 @@
+{
+  "_about": "Settings for scripts/mods_crosswalk.py. One entry per source; edit values here rather than in the script. Keys starting with _ are comments.",
+  "record_content_source": "University of Northern Iowa. Rod Library",
+  "schema_url": "https://www.loc.gov/standards/mods/v3/mods-3-8.xsd",
+
+  "sources": {
+    "scholarworks": {
+      "mapper": "digital_commons",
+      "input": "scholarworks/snapshots/latest_oai_dc.csv",
+      "repository": "University of Northern Iowa. Rod Library. UNI ScholarWorks",
+      "home_publisher": "UNI ScholarWorks",
+      "_include_external": "Digital Commons also exposes a few hundred records from other institutions' repositories (UNI-affiliated works). false = leave them out.",
+      "include_external": true
+    },
+
+    "archivesspace": {
+      "mapper": "archivesspace",
+      "input": "archivesspace/snapshots/latest_oai_dc.csv",
+      "repository_prefix": "University of Northern Iowa. Rod Library. Special Collections & University Archives",
+      "type_of_resource": "mixed material"
+    },
+
+    "preservica": {
+      "mapper": "preservica",
+      "input": "preservica/snapshots/latest_oai_dc.csv",
+      "repository": "University of Northern Iowa. Rod Library. Special Collections & University Archives",
+      "_item_url": "Public link for each asset/folder. {kind} is IO or SO, {uuid} the Preservica reference. Check one against uni.access.preservica.com; set to \"\" to leave links out.",
+      "item_url": "https://uni.access.preservica.com/uncategorized/{kind}_{uuid}/",
+      "_skip_titles": "Folders with these titles are structural (not described items): left out, and skipped over when finding a record's parent collection.",
+      "skip_titles": "^Representation_(Access|Preservation)$"
+    },
+
+    "museumplus": {
+      "mapper": "museumplus",
+      "input": "museumplus/snapshots/latest_object.csv",
+      "repository": "University of Northern Iowa. Museums & Collections",
+      "type_of_resource": "three dimensional object",
+      "_item_url": "Public link on collections.uni.edu. {id} is the MuseumPlus record ID (__id). Left blank until the pattern is confirmed.",
+      "item_url": ""
+    },
+
+    "archiveit": {
+      "mapper": "dublin_core",
+      "input": "archiveit/snapshots/latest_oai_dc.csv",
+      "repository": "University of Northern Iowa. Rod Library. Special Collections & University Archives",
+      "type_of_resource": "mixed material",
+      "collection": true,
+      "digital_origin": "born digital"
+    }
+  }
+}
