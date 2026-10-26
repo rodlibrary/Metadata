@@ -1,13 +1,14 @@
 # Metadata
-Metadata exports from Rod Library systems, including Digital Commons, ArchivesSpace, MusueumPlus, and Preservica.
+Metadata exports from Rod Library systems, including Digital Commons, ArchivesSpace, MusueumPlus, Preservica, and Archive-It.
 
 ## Contents
 
 - [`scholarworks/`](scholarworks/): weekly CSV snapshots of UNI ScholarWorks (Digital Commons) metadata, harvested automatically over OAI-PMH.
 - [`archivesspace/`](archivesspace/): weekly CSV snapshots of ArchivesSpace collection and component metadata, harvested automatically over OAI-PMH.
 - [`preservica/`](preservica/): weekly CSV snapshots of Preservica folder and asset metadata, harvested over OAI-PMH (needs a Preservica login; see its README for setup).
+- [`archiveit/`](archiveit/): weekly CSV snapshots of Archive-It web archive collection metadata, harvested over OAI-PMH; see its README for setup.
 - [`museumplus/`](museumplus/): weekly CSV snapshots of published MuseumPlus object records (collections.uni.edu), harvested through the MuseumPlus API; see its README for setup.
-- [`scripts/oai_harvest.py`](scripts/oai_harvest.py): the shared OAI-PMH harvester used by ScholarWorks, ArchivesSpace and Preservica.
+- [`scripts/oai_harvest.py`](scripts/oai_harvest.py): the shared OAI-PMH harvester used by ScholarWorks, ArchivesSpace, Preservica and Archive-It.
 - [`scripts/museumplus_harvest.py`](scripts/museumplus_harvest.py): the MuseumPlus API harvester.
 
 ## How the snapshots are made
