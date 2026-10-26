@@ -51,6 +51,7 @@ USER_AGENT = (
 )
 OAI_NS = "http://www.openarchives.org/OAI/2.0/"
 NS = {"oai": OAI_NS}
+EMPTY_REASON = ""  # set when the server reports noRecordsMatch
 SEP = " || "  # joins repeated values (e.g. multiple creators) in one cell
 
 # Columns that always come first, in this order. Any other metadata element
@@ -175,6 +176,8 @@ def check_oai_error(root):
         return None
     code = err.get("code", "")
     if code == "noRecordsMatch":
+        global EMPTY_REASON
+        EMPTY_REASON = f"the server answered noRecordsMatch: {(err.text or '').strip() or 'no records'}"
         return code
     raise RuntimeError(f"OAI-PMH error {code}: {(err.text or '').strip()}")
 
@@ -190,7 +193,9 @@ def paged(session, base_url, verb, params, delay=1.0):
             return
         container = root.find(f"oai:{verb}", NS)
         if container is None:
-            return
+            snippet = " ".join(ET.tostring(root, encoding="unicode").split())[:400]
+            raise SystemExit(f"Unexpected reply from {base_url} (no <{verb}> element; "
+                             f"root is <{local_name(root.tag)}>): {snippet}")
         yield container
 
         token_el = container.find("oai:resumptionToken", NS)
@@ -352,7 +357,8 @@ def main(argv=None):
         rows = [r for r in rows if r.get("deleted") != "true"]
 
     if not rows:
-        raise SystemExit("No records harvested; not writing a snapshot.")
+        raise SystemExit(f"No records harvested from {args.base_url}"
+                         f"{f' ({EMPTY_REASON})' if EMPTY_REASON else ''}; not writing a snapshot.")
 
     today = dt.date.today().isoformat()
     out_dir = Path(args.out_dir)
