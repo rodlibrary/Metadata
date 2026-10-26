@@ -1,0 +1,77 @@
+name: Weekly Archive-It metadata snapshot
+
+on:
+  schedule:
+    # Mondays at 15:00 UTC (10:00 AM Central during daylight time, 9:00 AM in winter)
+    - cron: "0 15 * * 1"
+  workflow_dispatch: {}   # lets you run it by hand from the Actions tab
+
+permissions:
+  contents: write         # needed to commit the new CSV
+
+concurrency:
+  group: ${{ github.workflow }}   # one run per collection at a time; other collections run in parallel
+  cancel-in-progress: false
+
+# Archive-It's OAI-PMH feed is public; no login is needed. Configure in
+# Settings -> Secrets and variables -> Actions -> Variables:
+#   ARCHIVEIT_ORG_ID   your Archive-It organization number (the number after
+#                      https://partner.archive-it.org/ when signed in)
+env:
+  ARCHIVEIT_ORG_ID: ${{ vars.ARCHIVEIT_ORG_ID }}
+
+jobs:
+  harvest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Check Archive-It settings
+        id: config
+        run: |
+          if [ -z "$ARCHIVEIT_ORG_ID" ]; then
+            echo "::warning::Archive-It harvest skipped: set the ARCHIVEIT_ORG_ID variable (see archiveit/README.md)."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v5
+        if: steps.config.outputs.ready == 'true'
+
+      - uses: actions/setup-python@v6
+        if: steps.config.outputs.ready == 'true'
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        if: steps.config.outputs.ready == 'true'
+        run: pip install -r requirements.txt
+
+      - name: Harvest OAI-PMH metadata
+        if: steps.config.outputs.ready == 'true'
+        run: >
+          python scripts/oai_harvest.py
+          --name archiveit
+          --base-url "https://archive-it.org/oai/organizations/${ARCHIVEIT_ORG_ID}"
+          --prefix oai_dc
+          --out-dir archiveit/snapshots
+          --delay 3
+          --keep 4
+
+      - name: Commit snapshot
+        if: steps.config.outputs.ready == 'true'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898333+github-actions[bot]@users.noreply.github.com"
+          git add -A archiveit/snapshots/
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Weekly Archive-It metadata snapshot $(date -u +%Y-%m-%d)"
+            # other collections may push at the same time: rebase and retry
+            for i in 1 2 3 4 5; do
+              git pull --rebase origin "${GITHUB_REF_NAME}" && git push && break
+              echo "Push attempt $i failed; retrying in 15s"; sleep 15
+              [ "$i" = 5 ] && exit 1
+            done
+          fi

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Harvest metadata from an OAI-PMH endpoint and write a dated CSV snapshot.
-Used for UNI ScholarWorks (Digital Commons), ArchivesSpace and Preservica.
+Used for UNI ScholarWorks (Digital Commons), ArchivesSpace, Preservica and Archive-It.
 
 Usage:
     python scripts/oai_harvest.py --base-url URL --name NAME [options]
