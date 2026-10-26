@@ -1,0 +1,15 @@
+source,field,pattern,genre,authority
+scholarworks,source,(?i)dissertations|theses,Academic theses,lcgft
+scholarworks,source,(?i)graduate research papers|honors program theses,Academic theses,lcgft
+scholarworks,source,(?i)photograph,Photographs,lcgft
+scholarworks,source,(?i)proceedings,Conference papers and proceedings,lcgft
+scholarworks,source,(?i)journal|review|quarterly|bulletin,Scholarly periodicals,lcgft
+scholarworks,source,(?i)recital programs,Concert programs,lcgft
+scholarworks,source,(?i)oral histor,Oral histories,lcgft
+scholarworks,source,(?i)book displays,Photographs,lcgft
+scholarworks,format,^video/,Video recordings,lcgft
+scholarworks,format,^audio/,Sound recordings,lcgft
+museumplus,ObjCategoryVoc,^Botany$,Plant specimens,lcgft
+museumplus,ObjCategoryVoc,^Mineralogy,Mineral specimens,aat
+museumplus,ObjCategoryVoc,^Paleontology$,Fossils,aat
+archiveit,*,.*,Web sites,lcgft
