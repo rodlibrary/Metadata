@@ -12,6 +12,19 @@ harvested over OAI-PMH from `https://scholarworks.uni.edu/do/oai/`.
 - **Harvester:** [`scripts/oai_harvest.py`](../scripts/oai_harvest.py), shared with the other collections.
   The CSV format is described in the [main README](../README.md#csv-format).
 
+## Extra fields
+
+Simple Dublin Core has no embargo, department or note fields, so each run also harvests a richer
+Digital Commons format (the first of `document-export`, `dcq`, `qualified-dublin-core` that ScholarWorks
+offers) and adds the fields whose names match `embargo|department|note|comment` as extra columns at the
+end of the CSV (e.g. `embargo_date`, `department`, `comments`). They're joined to the main rows by OAI identifier.
+
+The run's summary page lists every field name in that format with record counts. To add or drop
+fields, edit the `--extra-fields` pattern in
+[`.github/workflows/scholarworks-weekly.yml`](../.github/workflows/scholarworks-weekly.yml), e.g.
+`embargo|department|note|comment|advisor`. If the richer format can't be harvested, the run still writes
+the Dublin Core CSV and shows a warning.
+
 ## Running locally
 
 From the repository root:
