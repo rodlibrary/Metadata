@@ -55,7 +55,7 @@ jobs:
           --base-url "https://archive-it.org/oai/organizations/${ARCHIVEIT_ORG_ID}"
           --prefix oai_dc
           --out-dir archiveit/snapshots
-          --delay 3
+          --delay 10
           --keep 4
 
       - name: Commit snapshot
