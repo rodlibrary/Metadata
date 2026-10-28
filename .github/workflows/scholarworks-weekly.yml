@@ -16,7 +16,7 @@ concurrency:
 jobs:
   harvest:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 360  # two passes: oai_dc, then a richer format for extra fields
     steps:
       - uses: actions/checkout@v5
 
@@ -35,6 +35,8 @@ jobs:
           --prefix oai_dc
           --out-dir scholarworks/snapshots
           --keep 4
+          --extra-prefix document-export,dcq,qualified-dublin-core
+          --extra-fields "embargo|department|note|comment"
 
       - name: Commit snapshot
         run: |

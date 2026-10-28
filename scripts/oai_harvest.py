@@ -40,7 +40,7 @@ import shutil
 import sys
 import time
 import xml.etree.ElementTree as ET
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from pathlib import Path
 
 import requests
@@ -309,6 +309,107 @@ def harvest(session, base_url, prefix, set_spec=None, from_date=None, delay=1.0)
     return rows
 
 
+def parse_extra(rec) -> tuple[str, dict]:
+    """Flatten one record of a richer format (e.g. Digital Commons document-export
+    or qualified DC). <field name="X"><value>..</value></field> becomes column X;
+    other leaf elements use their own name. Returns (oai_identifier, {name: values})."""
+    header = rec.find("oai:header", NS)
+    ident = header.findtext("oai:identifier", "", NS).strip()
+    out: OrderedDict[str, list[str]] = OrderedDict()
+    md = rec.find("oai:metadata", NS)
+    if md is None or not len(md):
+        return ident, out
+    inside_field = set()
+    for el in md[0].iter():
+        if local_name(el.tag) == "field" and el.get("name"):
+            vals = [" ".join(v.split()) for v in el.itertext() if v.strip()]
+            if vals:
+                out.setdefault(el.get("name"), []).extend(vals)
+            inside_field.update(id(d) for d in el.iter())
+            continue
+        if id(el) in inside_field or len(el):
+            continue
+        text = " ".join((el.text or "").split())
+        if text:
+            out.setdefault(local_name(el.tag), []).append(text)
+    return ident, out
+
+
+def available_formats(session, base_url):
+    try:
+        root = oai_request(session, base_url, {"verb": "ListMetadataFormats"})
+        check_oai_error(root)
+    except (SystemExit, RuntimeError) as exc:
+        print(f"  could not list metadata formats: {exc}", file=sys.stderr)
+        return []
+    return [f.findtext("oai:metadataPrefix", "", NS)
+            for f in root.iter(f"{{{OAI_NS}}}metadataFormat")]
+
+
+def add_extra_fields(session, args, rows):
+    """Harvest a second, richer format and add the columns whose names match
+    --extra-fields to the main rows (joined on the OAI identifier). Never fails
+    the main harvest: problems become warnings."""
+    def warn(msg):
+        print(f"::warning title=Extra fields skipped::{msg}" if os.environ.get("GITHUB_ACTIONS")
+              else f"WARNING: {msg}", flush=True)
+
+    offered = available_formats(session, args.base_url)
+    wanted = [p.strip() for p in args.extra_prefix.split(",") if p.strip()]
+    prefix = next((p for p in wanted if p in offered), None)
+    lines = [f"#### Extra fields ({args.extra_prefix})", "",
+             f"Formats offered by the server: {', '.join(f'`{o}`' for o in offered) or 'unknown'}"]
+    if not prefix:
+        warn(f"none of {wanted} is offered by {args.base_url}; only {args.prefix} columns written.")
+        write_step_summary("\n".join(lines))
+        return []
+
+    print(f"Harvesting extra fields from {prefix}", file=sys.stderr)
+    pattern = re.compile(args.extra_fields, re.I)
+    by_id = {r["oai_identifier"]: r for r in rows}
+    seen, kept, matched = Counter(), [], 0
+    params = {"metadataPrefix": prefix}
+    if args.set_spec:
+        params["set"] = args.set_spec
+    if args.from_date:
+        params["from"] = args.from_date
+    taken = set(by_id[next(iter(by_id))].keys()) if by_id else set()
+    rename = {}
+    try:
+        n = 0
+        for container in paged(session, args.base_url, "ListRecords", params, delay=args.delay):
+            for rec in container.findall("oai:record", NS):
+                ident, fields = parse_extra(rec)
+                n += 1
+                for name in fields:
+                    seen[name] += 1
+                row = by_id.get(ident)
+                if row is None:
+                    continue
+                hit = False
+                for name, vals in fields.items():
+                    if not pattern.search(name):
+                        continue
+                    col = rename.setdefault(name, name if name not in taken else f"{prefix}_{name}")
+                    if col not in kept:
+                        kept.append(col)
+                    row[col] = SEP.join(dict.fromkeys(vals))
+                    hit = True
+                matched += hit
+            print(f"  {n} {prefix} records so far", file=sys.stderr)
+    except (SystemExit, RuntimeError) as exc:
+        warn(f"stopped harvesting {prefix}: {exc}. Extra columns may be incomplete.")
+
+    lines += [f"Used `{prefix}`. Columns added: {', '.join(f'`{k}`' for k in kept) or 'none'}"
+              f" ({matched} records had at least one).", "",
+              f"All field names in `{prefix}` (to adjust `--extra-fields`):", "",
+              "| Field | Records |", "|---|---|"]
+    lines += [f"| `{k}` | {v} |" for k, v in sorted(seen.items())]
+    write_step_summary("\n".join(lines))
+    print(f"  extra columns added: {kept or 'none'}", file=sys.stderr)
+    return kept
+
+
 def column_order(rows):
     seen = set()
     for r in rows:
@@ -365,6 +466,11 @@ def main(argv=None):
                    help="keep records the repository reports as deleted")
     p.add_argument("--list-sets", action="store_true")
     p.add_argument("--list-formats", action="store_true")
+    p.add_argument("--extra-prefix",
+                   help="also harvest this richer format (comma-separated list: the first one "
+                        "the server offers is used) and add matching fields as extra columns")
+    p.add_argument("--extra-fields", default="embargo|department|note|comment",
+                   help="regex of field names to take from --extra-prefix (case-insensitive)")
     p.add_argument("--auth", choices=["none", "preservica"], default="none",
                    help="log in before harvesting (preservica reads PRESERVICA_* env vars)")
     p.add_argument("--login-url",
@@ -386,6 +492,7 @@ def main(argv=None):
           f"{', set=' + args.set_spec if args.set_spec else ''})", file=sys.stderr)
     rows = harvest(session, args.base_url, args.prefix, args.set_spec,
                    args.from_date, args.delay)
+    extra_cols = add_extra_fields(session, args, rows) if args.extra_prefix and rows else []
 
     n_deleted = sum(r.get("deleted") == "true" for r in rows)
     if not args.include_deleted:
