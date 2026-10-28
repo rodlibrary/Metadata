@@ -129,12 +129,30 @@ def default_login_url(base_url):
     return f"{u.scheme}://{u.netloc}/api/accesstoken/login"
 
 
+# Some servers (e.g. archive-it.org) answer a burst of requests with an HTML
+# "Rate limit reached" page, sometimes with HTTP 200. Wait this long (seconds)
+# before each retry; about 33 minutes in total before giving up.
+RATE_LIMIT_WAITS = [60, 120, 300, 600, 900]
+RATE_LIMIT_RE = re.compile(rb"rate.?limit|too many requests", re.I)
+
+
+def looks_rate_limited(r) -> bool:
+    if r.status_code == 429:
+        return True
+    head = r.content[:2000]
+    return (r.status_code in (200, 403, 503) and b"<OAI-PMH" not in head
+            and RATE_LIMIT_RE.search(head) is not None)
+
+
 def oai_request(session, base_url, params, max_retries=6, timeout=120):
-    """GET an OAI-PMH response, retrying on 503/429/5xx and network errors."""
+    """GET an OAI-PMH response, retrying on rate limits, 5xx and network errors."""
     delay = 10
     auth = getattr(session, "oai_auth", None)
     relogged = False
-    for attempt in range(1, max_retries + 1):
+    rate_waits = list(RATE_LIMIT_WAITS)
+    attempt = 0
+    while attempt < max_retries:
+        attempt += 1
         if auth:
             auth.ensure(session)
         try:
@@ -147,8 +165,25 @@ def oai_request(session, base_url, params, max_retries=6, timeout=120):
             delay = min(delay * 2, 300)
             continue
 
+        if looks_rate_limited(r):
+            if not rate_waits:
+                raise SystemExit(f"{base_url} is still rate-limiting after waiting "
+                                 f"{sum(RATE_LIMIT_WAITS) // 60} minutes; try again later.")
+            wait = rate_waits.pop(0)
+            ra = r.headers.get("Retry-After")
+            if ra and ra.isdigit():
+                wait = max(wait, int(ra))
+            print(f"  rate limit reached; waiting {wait}s before retrying", file=sys.stderr)
+            time.sleep(wait)
+            attempt -= 1  # rate-limit waits don't use up the normal retries
+            continue
+
         if r.status_code == 200:
-            return ET.fromstring(r.content)
+            try:
+                return ET.fromstring(r.content)
+            except ET.ParseError:
+                raise SystemExit(f"Reply from {base_url} is not XML: "
+                                 f"{' '.join(r.text.split())[:300]}")
 
         if r.status_code in (401, 403) and auth and not relogged:
             print(f"  HTTP {r.status_code}; logging in again", file=sys.stderr)
