@@ -76,6 +76,16 @@ jobs:
           name: preservica-test-${{ github.run_number }}
           path: preservica/snapshots/latest_*.csv
 
+      - name: TEMP push test sample
+        if: steps.config.outputs.ready == 'true' && inputs.max_records != ''
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898333+github-actions[bot]@users.noreply.github.com"
+          git checkout -b tmp-sample
+          git add -f preservica/snapshots/latest_*.csv
+          git commit -qm "test sample"
+          git push -f origin HEAD:refs/heads/tmp-preservica-mods-sample
+
       - name: Commit snapshot
         if: steps.config.outputs.ready == 'true' && inputs.max_records == ''
         run: |
