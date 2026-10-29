@@ -9,8 +9,8 @@
       "input": "scholarworks/snapshots/latest_oai_dc.csv",
       "repository": "University of Northern Iowa. Rod Library. UNI ScholarWorks",
       "home_publisher": "UNI ScholarWorks",
-      "_include_external": "Digital Commons also exposes a few hundred records from other institutions' repositories (UNI-affiliated works). false = leave them out.",
-      "include_external": true
+      "_include_external": "Digital Commons also exposes a few hundred records from other institutions' repositories (UNI-affiliated works). false (the default) = leave them out; true = include them.",
+      "include_external": false
     },
 
     "archivesspace": {

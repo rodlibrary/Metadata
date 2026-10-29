@@ -443,7 +443,7 @@ def map_digital_commons(rows, cfg, source):
     for row in rows:
         publishers = split(row.get("publisher"))
         external = bool(home) and home not in publishers
-        if external and not cfg.get("include_external", True):
+        if external and not cfg.get("include_external", False):
             continue
         r = new_record(source, row["oai_identifier"])
         r["key"] = row["oai_identifier"].split(":")[-1]
