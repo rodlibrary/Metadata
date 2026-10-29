@@ -14,8 +14,12 @@
     },
 
     "archivesspace": {
-      "mapper": "archivesspace",
-      "input": "archivesspace/snapshots/latest_oai_dc.csv",
+      "mapper": "archivesspace_mods",
+      "input": "archivesspace/snapshots/latest_oai_mods.csv",
+      "_note_types": "ArchivesSpace MODS note and accessCondition types. drop_note_types are left out (preferredcitation is a fill-in-the-blanks template); the others decide which template column an accessCondition goes to.",
+      "drop_note_types": ["preferredcitation"],
+      "access_note_types": ["restrictionOnAccess"],
+      "use_note_types": ["useAndReproduction"],
       "repository_prefix": "University of Northern Iowa. Rod Library. Special Collections & University Archives",
       "type_of_resource": "mixed material"
     },

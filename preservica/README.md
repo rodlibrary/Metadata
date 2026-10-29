@@ -39,6 +39,15 @@ is always available: it is built from the record's embedded Dublin Core, or from
 fields when there is none. Other formats (e.g. MODS, EAD) are offered only for records that contain that
 metadata. Preservica does not support OAI sets, so `--set` and `--list-sets` don't apply.
 
+**MODS:** as of October 2026 the service offers only `XIP` and `oai_dc`, because no records carry
+embedded MODS, so the harvest stays on `oai_dc`. If MODS is added to records in Preservica later,
+harvest it with `--prefix MODS --merge-prefix oai_dc` (MODS for the records that have it, oai_dc for
+the rest, and oai_dc's `type` and `relation` for the folder structure). The crosswalk would then need
+a MODS mapper like ArchivesSpace's.
+
+**Test run:** **Actions → Weekly Preservica metadata snapshot → Run workflow**, with a number in
+*Test run*, harvests only that many records, attaches the CSV to the run and commits nothing.
+
 ## Running locally
 
 From the repository root:

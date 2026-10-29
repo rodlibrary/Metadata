@@ -573,6 +573,212 @@ def map_archivesspace(rows, cfg, source):
         yield r
 
 
+# --------------------------------------------------------------------------
+# Snapshots harvested in MODS (oai_harvest.py --prefix oai_mods): one column per MODS
+# path, e.g. "titleinfo/title", "note[@type='bioghist']", "subject/topic". Repeated
+# elements are aligned: the n-th value of every name/... column belongs to the n-th <name>.
+# --------------------------------------------------------------------------
+class ModsRow:
+    """Read a flattened MODS row. Paths are matched case-insensitively (ArchivesSpace
+    writes <titleinfo>), and "oai_dc:..." columns merged from oai_dc are reached the same way."""
+
+    def __init__(self, row):
+        self.row = row
+        self.keys = {k.lower(): k for k in row}
+
+    def raw(self, path):
+        k = self.keys.get(path.lower())
+        return self.row.get(k, "") if k else ""
+
+    def get(self, *paths):
+        """Non-blank values of the first path that has any."""
+        for path in paths:
+            vals = split(self.raw(path))
+            if vals:
+                return vals
+        return []
+
+    def aligned(self, path, n):
+        """Exactly n values (one per element instance), blanks kept."""
+        v = self.raw(path)
+        vals = [x.strip() for x in v.split(SEP.strip())] if v else []
+        return (vals + [""] * n)[:n] if vals else [""] * n
+
+    def count(self, path):
+        """How many element instances a column covers (its values, blanks included)."""
+        v = self.raw(path)
+        return len(v.split(SEP.strip())) if v else 0
+
+    def matching(self, pattern):
+        """(column, qualifier) for columns whose path matches pattern, e.g. note[@type='x']."""
+        rx = re.compile(pattern, re.I)
+        for k in self.row:
+            m = rx.match(k)
+            if m:
+                yield k, (m.group(1) if m.groups() else "")
+
+
+def mods_subjects(mr):
+    """Subject headings with each part typed by its MODS element where MODS says so."""
+    n = mr.count("subject")
+    headings = mr.aligned("subject", n)
+    kinds = {"subject/topic": "topic", "subject/geographic": "geographic",
+             "subject/temporal": "temporal", "subject/name/namePart": "name",
+             "subject/titleinfo/title": "topic", "subject/occupation": "topic",
+             "subject/genre": "genre"}
+    typed = {col: mr.aligned(col, n) for col in kinds}
+    out, genres = [], []
+    for i, h in enumerate(headings):
+        if not h:
+            continue
+        known = {}
+        for col, kind in kinds.items():
+            v = re.sub(r"[\s;.,]+$", "", typed[col][i].strip())
+            # ArchivesSpace puts whole headings ("Polk County (Iowa)--History") in one <topic>;
+            # the element's type only describes a single term, so trust it only then.
+            if v and "--" not in v:
+                known.setdefault(v, kind)
+        comps = []
+        for k, text in parse_heading(h):
+            kind = known.get(text) or next((kd for v, kd in known.items()
+                                            if kd == "name" and text.startswith(v)), None) or k
+            if kind == "genre":
+                genres.append(text)
+                kind = "topic"
+            comps.append((kind, text))
+        out.append(comps)
+    return out, genres
+
+
+def map_archivesspace_mods(rows, cfg, source):
+    """ArchivesSpace oai_mods, with identifier/date/publisher merged in from oai_dc
+    (ArchivesSpace's MODS has no record URL or call number and few dates)."""
+    drop_notes = {t.lower() for t in cfg.get("drop_note_types", [])}
+    access_types = {t.lower() for t in cfg.get("access_note_types", [])}
+    use_types = {t.lower() for t in cfg.get("use_note_types", [])}
+    mrs = [ModsRow(row) for row in rows]
+
+    by_callno, by_title = {}, {}
+    for mr in mrs:
+        if mr.row.get("record_type") == "resource":
+            ids = mr.get("oai_dc:identifier", "identifier")
+            url = next((i for i in ids if is_url(i)), "")
+            for i in ids:
+                if not is_url(i):
+                    by_callno[i] = url
+            for t in mr.get("titleinfo/title", "oai_dc:title"):
+                by_title[t] = url
+
+    for mr in mrs:
+        row = mr.row
+        uri = row["oai_identifier"].replace("oai:archivesspace:", "")
+        r = new_record(source, uri)
+        r["key"] = uri.strip("/").replace("/", "_")
+        r["datestamp"] = row.get("datestamp", "")
+        r["record_type"] = row.get("record_type", "")
+        r["collection"] = r["record_type"] == "resource"
+        r["title"] = [clean_title(t) for t in mr.get("titleinfo/title", "oai_dc:title")]
+        r["abstract"] = [clean_markup(d) for d in mr.get("abstract", "oai_dc:description")]
+
+        n = mr.count("name/namePart")
+        parts = mr.aligned("name/namePart", n)
+        ntypes = mr.aligned("name/@type", n)
+        dates = mr.aligned("name/namePart[@type='date']", n)
+        roles = mr.aligned("name/role/roleTerm[@type='text']", n)
+        codes = mr.aligned("name/role/roleTerm[@type='code']", n)
+        uris = mr.aligned("name/@valueURI", n)
+        for part, nt, d, role, code, u in zip(parts, ntypes, dates, roles, codes, uris):
+            role = role.lower() or ("creator" if not code else "")
+            add_name(r, part, role, code or ("cre" if role == "creator" else ""),
+                     {"personal": "personal", "corporate": "corporate", "family": "family"}.get(nt),
+                     d, u)
+        for c in mr.get("oai_dc:creator"):
+            add_name(r, c, "creator", "cre")
+
+        r["type_of_resource"] = mr.get("typeOfResource") or [cfg.get("type_of_resource", "mixed material")]
+        r["genres"] += [(strip_period(g), "") for g in mr.get("genre", "oai_dc:type")]
+        r["subjects"], subject_genres = mods_subjects(mr)
+        r["genres"] += [(g, "") for g in subject_genres]
+        for s_ in mr.get("oai_dc:subject") + mr.get("oai_dc:coverage"):
+            add_subject(r, s_)
+
+        mods_dates = []
+        for col, point in mr.matching(r"^originInfo/date(?:Created|Issued|Other)(?:\[@point='(\w+)'\])?$"):
+            if not point:
+                mods_dates += split(row[col])
+        for d in mr.get("oai_dc:date"):
+            if not d.lower().startswith("date acquired"):
+                add_date(r, d)
+        for d in mods_dates:       # MODS dates are already normalized (e.g. 1965/1997)
+            edtf, start, end = parse_date(d.replace("/", "-"))
+            if re.match(r"^\d{4}(-\d\d){0,2}(/\d{4}(-\d\d){0,2})?$", d):
+                edtf = d
+            if edtf and edtf not in r["date_created"]:
+                r["date_created"].insert(0, edtf)
+                if start is not None:
+                    r["years"].append((start, end))
+            if not r["display_date"]:
+                r["display_date"].append(display_date(d.replace("/", "-")))
+
+        r["extent"] = [re.sub(r"\s*other_unmapped$", "", x) for x in mr.get("physicalDescription/extent",
+                                                                            "oai_dc:format")]
+        r["language"] = normalize_languages(
+            mr.get("language/languageTerm[@type='code']", "oai_dc:language")
+            + mr.get("note[@type='language']"))
+
+        for col, ntype in mr.matching(r"^note(?:\[@type='([^']*)'\])?$"):
+            if (ntype or "").lower() in drop_notes:
+                continue
+            for v in split(row[col]):
+                r["note"].append(clean_markup(v))
+                r["note_type"].append(ntype or "")
+        for col, atype in mr.matching(r"^accessCondition(?:\[@type='([^']*)'\])?$"):
+            for v in split(row[col]):
+                v = clean_markup(v)
+                t = (atype or "").lower()
+                if t in access_types:
+                    r["access"].append(v)
+                elif t in use_types:
+                    r["use"].append(v)
+                else:
+                    add_rights(r, v)
+        for v in mr.get("oai_dc:rights"):
+            add_rights(r, v)
+
+        ids = mr.get("oai_dc:identifier") + mr.get("identifier", "identifier[@type='local']")
+        for i in dedupe(ids):
+            (r["url"] if is_url(i) else r["shelf"]).append(i)
+        for u in mr.get("location/url"):
+            if u not in r["url"]:
+                r["url"].append(u)
+
+        hosts = mr.get("relatedItem[@type='host']", "relatedItem[@type='host']/titleinfo/title")
+        if not r["collection"] and not hosts:
+            hosts = mr.get("oai_dc:relation")[:1]
+        for rel in hosts[:1]:
+            m = re.match(r"^(.*),\s*([^,]*\d[^,]*)$", rel)
+            title, callno = (m.group(1), m.group(2)) if m else (rel, "")
+            r["host_title"].append(title.strip())
+            if callno:
+                r["host_id"].append(callno.strip())
+            link = by_callno.get(callno.strip()) or by_title.get(title.strip())
+            if link:
+                r["host_url"].append(link)
+        if r["collection"]:
+            for rel in mr.get("oai_dc:relation"):
+                rel = clean_markup(rel)
+                if rel not in r["note"]:
+                    r["note"].append(rel)
+                    r["note_type"].append("")
+
+        repos = mr.get("location/physicalLocation") or [
+            p_ for p_ in mr.get("oai_dc:publisher") if p_ != "University of Northern Iowa"]
+        prefix = cfg.get("repository_prefix", "")
+        r["repository"] = [f"{prefix}. {p_}" if prefix else p_ for p_ in repos] or [prefix]
+        r["genres"] = dedupe(r["genres"] + apply_genre_rules(source, {"record_type": [r["record_type"]]}))
+        yield r
+
+
 def map_preservica(rows, cfg, source):
     """Preservica oai_dc: folders (StructuralObject) and assets (InformationObject)."""
     # The OAI feed can list a record several times; keep the newest version of each.
@@ -736,6 +942,7 @@ def map_dublin_core(rows, cfg, source):
 MAPPERS = {
     "digital_commons": map_digital_commons,
     "archivesspace": map_archivesspace,
+    "archivesspace_mods": map_archivesspace_mods,
     "preservica": map_preservica,
     "museumplus": map_museumplus,
     "dublin_core": map_dublin_core,
@@ -877,8 +1084,9 @@ def to_mods(r, record_content_source):
 
     for a in r["abstract"]:
         sub(m, "abstract", a)
-    for n in r["note"]:
-        sub(m, "note", n)
+    for i, n in enumerate(r["note"]):
+        ntype = r["note_type"][i] if i < len(r["note_type"]) else ""
+        sub(m, "note", n, type=ntype or None)
 
     for comps in r["subjects"]:
         s = sub(m, "subject")
