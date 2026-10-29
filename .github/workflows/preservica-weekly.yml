@@ -4,7 +4,12 @@ on:
   schedule:
     # Mondays at 13:00 UTC (8:00 AM Central during daylight time, 7:00 AM in winter)
     - cron: "0 13 * * 1"
-  workflow_dispatch: {}   # lets you run it by hand from the Actions tab
+  workflow_dispatch:      # lets you run it by hand from the Actions tab
+    inputs:
+      max_records:
+        description: "Test run: harvest only this many records, save the CSV as a run artifact, commit nothing (blank = full harvest)"
+        type: string
+        default: ""
 
 permissions:
   contents: write         # needed to commit the new CSV
@@ -61,9 +66,17 @@ jobs:
           --prefix oai_dc
           --out-dir preservica/snapshots
           --keep 4
+          ${{ inputs.max_records && format('--max-records {0}', inputs.max_records) || '' }}
+
+      - name: Save test-run CSV
+        if: steps.config.outputs.ready == 'true' && inputs.max_records != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: preservica-test-${{ github.run_number }}
+          path: preservica/snapshots/latest_oai_dc.csv
 
       - name: Commit snapshot
-        if: steps.config.outputs.ready == 'true'
+        if: steps.config.outputs.ready == 'true' && inputs.max_records == ''
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898333+github-actions[bot]@users.noreply.github.com"

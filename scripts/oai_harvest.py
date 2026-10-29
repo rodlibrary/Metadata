@@ -17,8 +17,17 @@ Examples:
     python scripts/oai_harvest.py --name preservica --auth preservica \\
         --base-url https://<server>.preservica.com/OAI-PMH --out-dir preservica/snapshots
 
+    # ArchivesSpace in MODS (the weekly workflow does this)
+    python scripts/oai_harvest.py --name archivesspace --prefix oai_mods \
+        --base-url https://aspace.library.uni.edu:8082 --out-dir archivesspace/snapshots
+
 Options:
-    --prefix dcq / oai_dcterms ...   another metadata format (default oai_dc)
+    --prefix dcq / oai_dcterms ...   another metadata format (default oai_dc). A comma-separated
+                                     list uses the first one the server offers (e.g. MODS,mods)
+    --merge-prefix oai_dc            also harvest this format: its fields are added as
+                                     "oai_dc:<field>" columns, and records only it has are kept
+    --merge-fields "^(date|identifier)$"   only merge these fields (regex; default all)
+    --max-records N                  stop after N records (for testing)
     --set SETSPEC                    one OAI set only
     --list-formats / --list-sets     print what the endpoint offers and exit
     --keep 4                         keep only the 4 newest dated snapshots
@@ -251,6 +260,101 @@ def local_name(tag: str) -> str:
     return tag.rsplit("}", 1)[-1]
 
 
+MODS_NS = "http://www.loc.gov/mods/v3"
+# MODS attributes that distinguish kinds of the same element; they become part of the
+# column name, e.g. identifier[@type='local'], dateCreated[@point='start'].
+MODS_QUALIFIERS = ("type", "point", "eventType", "access")
+# MODS attributes kept as their own columns, e.g. name/@type, subject/@valueURI.
+MODS_ATTR_COLUMNS = ("valueURI", "href", "displayLabel", "collection", "authority", "type")
+# Where qualifiers would split one kind of element apart, keep them as attribute columns.
+MODS_ATTR_NOT_QUALIFIER = {"name": {"type"}, "subject": set(), "typeOfResource": set()}
+MODS_ORDER = ["titleInfo", "name", "typeOfResource", "genre", "originInfo", "language",
+              "physicalDescription", "abstract", "tableOfContents", "targetAudience", "note",
+              "subject", "classification", "relatedItem", "identifier", "location",
+              "accessCondition", "part", "extension", "recordInfo"]
+MODS_SUBJECT_PARTS = {"topic", "geographic", "temporal", "genre", "occupation", "titleInfo",
+                      "name", "hierarchicalGeographic", "cartographics", "geographicCode"}
+INSTANCE_SEP = " ; "   # several values of one field inside one element
+
+
+def mods_step(el):
+    name = local_name(el.tag)
+    skip = MODS_ATTR_NOT_QUALIFIER.get(name, ())
+    quals = [f"[@{a}='{el.get(a)}']" for a in MODS_QUALIFIERS if el.get(a) and a not in skip]
+    return name + "".join(quals)
+
+
+def mods_attrs(el, top=False):
+    """Attribute columns of one element: {"@valueURI": "...", ...}. @authority is kept only on
+    top-level elements (subject, genre, name), where it says which vocabulary a term is from."""
+    name = local_name(el.tag)
+    out = {}
+    for key, val in el.attrib.items():
+        a = local_name(key)
+        if a == "authority" and not top:
+            continue
+        if a in MODS_ATTR_COLUMNS and val.strip() and not (
+                a in MODS_QUALIFIERS and a not in MODS_ATTR_NOT_QUALIFIER.get(name, ())):
+            out[f"@{a}"] = " ".join(val.split())
+    return out
+
+
+def flatten_mods(mods_el) -> OrderedDict:
+    """Flatten a <mods> record into path-named columns, e.g. "name/namePart",
+    "name/role/roleTerm[@type='text']", "relatedItem[@type='host']/titleInfo/title".
+
+    Each repeated top-level element (every <name>, every <subject>, ...) adds exactly one
+    value to each of its group's columns, empty if it has none, so the n-th value of
+    name/namePart and of name/role/roleTerm belong to the same name. Several values inside
+    one element are joined with " ; " (subject parts with "--"). Each <subject> also gets a
+    "subject" column holding the whole heading in order (Topic--Place--Period)."""
+    groups: OrderedDict[str, list[OrderedDict]] = OrderedDict()
+    for top in mods_el:
+        if not isinstance(top.tag, str):
+            continue
+        key = mods_step(top)
+        inst: OrderedDict[str, list[str]] = OrderedDict()
+        heading = []
+        for col, val in mods_attrs(top, top=True).items():
+            inst.setdefault(f"{key}/{col}", []).append(val)
+        stack = [(top, key)]
+        while stack:
+            el, path = stack.pop()
+            kids = [k for k in el if isinstance(k.tag, str)]
+            for k in reversed(kids):
+                kpath = f"{path}/{mods_step(k)}"
+                for col, val in mods_attrs(k).items():
+                    inst.setdefault(f"{kpath}/{col}", []).append(val)
+                stack.append((k, kpath))
+            text = " ".join((el.text or "").split())
+            if text and (not kids or el is top):
+                inst.setdefault(path, []).append(text)
+        if local_name(top.tag) == "subject":
+            # the whole heading in document order; a name's parts (name, dates) stay together
+            for part in top:
+                if not isinstance(part.tag, str):
+                    continue
+                if local_name(part.tag) in ("name", "titleInfo"):
+                    texts = [" ".join(t.split()) for t in part.itertext() if t.strip()]
+                    if texts:
+                        heading.append(", ".join(texts))
+                else:
+                    heading += [" ".join(t.split()) for t in part.itertext() if t.strip()]
+            if heading:
+                inst["subject"] = ["--".join(heading)]
+        if inst:
+            groups.setdefault(key, []).append(inst)
+
+    row: OrderedDict[str, str] = OrderedDict()
+    for key, insts in groups.items():
+        cols = list(OrderedDict.fromkeys(c for i in insts for c in i))
+        joiner = "--" if key == "subject" else INSTANCE_SEP
+        for c in cols:
+            vals = [joiner.join(i.get(c, [])) for i in insts]
+            row[c] = SEP.join(vals) if len(vals) > 1 else vals[0]
+    return row
+
+
 def parse_record(rec) -> OrderedDict:
     """Flatten one OAI <record> into {column: value}."""
     row: OrderedDict[str, list[str]] = OrderedDict()
@@ -265,6 +369,13 @@ def parse_record(rec) -> OrderedDict:
         row["record_type"] = [m.group(1)[:-1]]
 
     md = rec.find("oai:metadata", NS)
+    mods = None
+    if md is not None and len(md):
+        mods = md[0] if md[0].tag == f"{{{MODS_NS}}}mods" else md[0].find(f".//{{{MODS_NS}}}mods")
+    if mods is not None:
+        out = OrderedDict((k, SEP.join(v)) for k, v in row.items())
+        out.update(flatten_mods(mods))
+        return out
     if md is not None and len(md):
         wrapper = md[0]  # e.g. <oai_dc:dc> or <dcq:qualifieddc>
         for el in wrapper.iter():
@@ -295,7 +406,7 @@ def list_sets(session, base_url):
             print(f"{s.findtext('oai:setSpec', '', NS)}\t{s.findtext('oai:setName', '', NS)}")
 
 
-def harvest(session, base_url, prefix, set_spec=None, from_date=None, delay=1.0):
+def harvest(session, base_url, prefix, set_spec=None, from_date=None, delay=1.0, max_records=0):
     params = {"metadataPrefix": prefix}
     if set_spec:
         params["set"] = set_spec
@@ -306,7 +417,53 @@ def harvest(session, base_url, prefix, set_spec=None, from_date=None, delay=1.0)
         for rec in container.findall("oai:record", NS):
             rows.append(parse_record(rec))
         print(f"  {len(rows)} records so far", file=sys.stderr)
+        if max_records and len(rows) >= max_records:
+            print(f"  stopping at --max-records {max_records}", file=sys.stderr)
+            return rows[:max_records]
     return rows
+
+
+def resolve_prefix(session, base_url, wanted):
+    """'MODS,mods' -> the first of these the server offers (case-insensitive)."""
+    options = [p.strip() for p in wanted.split(",") if p.strip()]
+    if len(options) == 1:
+        return options[0]
+    offered = available_formats(session, base_url)
+    for o in options:
+        for f in offered:
+            if f.lower() == o.lower():
+                return f
+    raise SystemExit(f"None of {options} is offered by {base_url} "
+                     f"(it offers: {', '.join(offered) or 'nothing listed'}).")
+
+
+def merge_format(session, args, rows, prefix):
+    """Harvest a second format and merge it in: every field becomes "<prefix>:<field>",
+    and records missing from the main harvest are added (Preservica only serves MODS for
+    records that have MODS, so oai_dc fills in the rest)."""
+    by_id = {r["oai_identifier"]: r for r in rows}
+    extra = harvest(session, args.base_url, prefix, args.set_spec, args.from_date, args.delay,
+                    args.max_records)
+    added = 0
+    for x in extra:
+        ident = x["oai_identifier"]
+        keep = re.compile(args.merge_fields or ".", re.I)
+        row = by_id.get(ident)
+        # records only this format has keep all their fields; others only --merge-fields
+        fields = {f"{prefix}:{k}": v for k, v in x.items()
+                  if k not in ("oai_identifier", "datestamp", "setSpec", "deleted", "record_type")
+                  and (row is None or keep.search(k))}
+        if row is None:
+            row = OrderedDict((k, x[k]) for k in ("oai_identifier", "datestamp", "setSpec",
+                                                  "deleted", "record_type") if k in x)
+            row["metadata_format"] = prefix
+            rows.append(row)
+            by_id[ident] = row
+            added += 1
+        elif x.get("datestamp", "") > row.get("datestamp", ""):
+            row["datestamp"] = x["datestamp"]
+        row.update(fields)
+    return len(extra), added
 
 
 def parse_extra(rec) -> tuple[str, dict]:
@@ -417,7 +574,19 @@ def column_order(rows):
     cols = list(BASE_COLUMNS)
     if "record_type" in seen:
         cols.append("record_type")
-    cols += [c for c in DC_ORDER if c in seen and c not in cols]
+    if "metadata_format" in seen:
+        cols.append("metadata_format")
+    if not any("/" in c for c in seen):     # Dublin Core
+        cols += [c for c in DC_ORDER if c in seen and c not in cols]
+
+    order = [m.lower() for m in MODS_ORDER]   # ArchivesSpace writes <titleinfo>
+
+    def mods_key(c):
+        top = re.split(r"[/\[]", c, 1)[0].lower()
+        return (order.index(top) if top in order else len(order), 0 if c.lower() == top else 1, c)
+    mods_cols = [c for c in seen - set(cols) if re.split(r"[/\[:]", c, 1)[0].lower() in order
+                 and ":" not in c.split("/", 1)[0]]
+    cols += sorted(mods_cols, key=mods_key)
     cols += sorted(seen - set(cols))
     return cols
 
@@ -466,6 +635,12 @@ def main(argv=None):
                    help="keep records the repository reports as deleted")
     p.add_argument("--list-sets", action="store_true")
     p.add_argument("--list-formats", action="store_true")
+    p.add_argument("--merge-prefix",
+                   help="also harvest this format (e.g. oai_dc): add its fields as <prefix>:<field> "
+                        "columns and keep records that only it has")
+    p.add_argument("--merge-fields",
+                   help="regex: only merge these fields of --merge-prefix (default: all)")
+    p.add_argument("--max-records", type=int, default=0, help="stop after N records (testing)")
     p.add_argument("--extra-prefix",
                    help="also harvest this richer format (comma-separated list: the first one "
                         "the server offers is used) and add matching fields as extra columns")
@@ -488,10 +663,30 @@ def main(argv=None):
         list_sets(session, args.base_url)
         return 0
 
+    wanted = args.prefix
+    try:
+        args.prefix = resolve_prefix(session, args.base_url, wanted)
+    except SystemExit as exc:
+        if not args.merge_prefix:
+            raise
+        args.prefix = wanted.split(",")[0].strip()
+        print(f"::warning title=No {args.prefix} records::{exc} Using {args.merge_prefix} only."
+              if os.environ.get("GITHUB_ACTIONS") else f"WARNING: {exc}", flush=True)
+        args.skip_main = True
     print(f"Harvesting {args.base_url} (prefix={args.prefix}"
           f"{', set=' + args.set_spec if args.set_spec else ''})", file=sys.stderr)
-    rows = harvest(session, args.base_url, args.prefix, args.set_spec,
-                   args.from_date, args.delay)
+    rows = [] if getattr(args, "skip_main", False) else harvest(
+        session, args.base_url, args.prefix, args.set_spec, args.from_date, args.delay,
+        args.max_records)
+    merge_note = ""
+    if args.merge_prefix:
+        n_main = len(rows)
+        for r in rows:
+            r["metadata_format"] = args.prefix
+        print(f"Merging in {args.merge_prefix}", file=sys.stderr)
+        n_extra, added = merge_format(session, args, rows, args.merge_prefix)
+        merge_note = (f". {n_main} records in {args.prefix}; {n_extra} in {args.merge_prefix}, "
+                      f"of which {added} had no {args.prefix} and were added from {args.merge_prefix}")
     extra_cols = add_extra_fields(session, args, rows) if args.extra_prefix and rows else []
 
     n_deleted = sum(r.get("deleted") == "true" for r in rows)
@@ -504,13 +699,15 @@ def main(argv=None):
 
     today = dt.date.today().isoformat()
     out_dir = Path(args.out_dir)
-    snap = out_dir / f"{args.name}_{args.prefix}_{today}.csv"
+    label = args.prefix.lower()   # Preservica calls the format "MODS"
+    snap = out_dir / f"{args.name}_{label}_{today}.csv"
     cols = write_csv(rows, snap)
-    shutil.copyfile(snap, out_dir / f"latest_{args.prefix}.csv")
-    prune(out_dir, args.name, args.prefix, args.keep)
+    shutil.copyfile(snap, out_dir / f"latest_{label}.csv")
+    prune(out_dir, args.name, label, args.keep)
 
     msg = (f"Wrote {len(rows)} records, {len(cols)} columns to {snap}"
-           f" ({n_deleted} deleted records {'kept' if args.include_deleted else 'skipped'})")
+           f" ({n_deleted} deleted records {'kept' if args.include_deleted else 'skipped'})"
+           f"{merge_note}")
     types = {}
     for r in rows:
         if r.get("record_type"):
