@@ -49,13 +49,31 @@ jobs:
           name: archivesspace-test-${{ github.run_number }}
           path: archivesspace/snapshots/latest_*.csv
 
+      - name: TEMP raw MODS samples
+        if: inputs.max_records != ''
+        run: |
+          python - <<'EOF'
+          import requests, time
+          base = "https://aspace.library.uni.edu:8082"
+          ids = ["/repositories/2/resources/1", "/repositories/2/resources/100", "/repositories/3/resources/397",
+                 "/repositories/3/resources/1", "/repositories/2/archival_objects/1", "/repositories/3/archival_objects/46415",
+                 "/repositories/4/resources/1"]
+          out = []
+          for i in ids:
+              for p in ("oai_mods", "oai_dc"):
+                  r = requests.get(base, params={"verb": "GetRecord", "metadataPrefix": p, "identifier": "oai:archivesspace:" + i}, timeout=120)
+                  out.append(f"\n\n===== {i} {p} =====\n" + r.text)
+                  time.sleep(1)
+          open("archivesspace/snapshots/raw_samples.txt", "w").write("".join(out))
+          EOF
+
       - name: TEMP push test sample
         if: inputs.max_records != ''
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898333+github-actions[bot]@users.noreply.github.com"
           git checkout -b tmp-sample
-          git add -f archivesspace/snapshots/latest_*.csv
+          git add -f archivesspace/snapshots/latest_*.csv archivesspace/snapshots/raw_samples.txt
           git commit -qm "test sample"
           git push -f origin HEAD:refs/heads/tmp-archivesspace-mods-sample
 
