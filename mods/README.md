@@ -97,5 +97,6 @@ These come from the harvests, not the crosswalk, and limit what the MODS can say
   have no title, so most titles are devised from the description.
 - **ArchivesSpace** oai_dc carries subjects, agents and languages for only a small share of records; `oai_mods`
   (offered by the endpoint) would carry more.
-- **ScholarWorks** includes about 320 records from other institutions' Digital Commons sites. Set
-  `include_external` to `false` in `config.json` to leave them out.
+- **ScholarWorks**' harvest includes about 320 records from other institutions' Digital Commons sites (their
+  `publisher` isn't "UNI ScholarWorks"). The crosswalk leaves them out; set `include_external` to `true` in
+  `config.json` to include them.
