@@ -55,25 +55,25 @@ Field names follow Blacklight's default dynamic fields (`*_tsim` searchable, `*_
 
 How each source's fields reach the template columns. "—" means the source has nothing for that column today.
 
-| Template column (MODS) | ScholarWorks (Digital Commons, oai_dc) | ArchivesSpace (oai_dc) | Preservica (oai_dc) | MuseumPlus (API) |
+| Template column (MODS) | ScholarWorks (Digital Commons, oai_dc) | ArchivesSpace (oai_mods, plus oai_dc links, call numbers, dates) | Preservica (oai_dc) | MuseumPlus (API) |
 |---|---|---|---|---|
 | file or folder name | OAI ID (last part) | record URI | title (file/folder name) | `museumplus-<id>` |
-| Location (URL) | first `identifier` URL (landing page)¹ | `identifier` URL | `item_url` pattern + reference¹ | `item_url` pattern (blank until set) |
+| Location (URL) | first `identifier` URL (landing page)¹ | `oai_dc:identifier` URL (MODS has none) | `item_url` pattern + reference¹ | `item_url` pattern (blank until set) |
 | Source ID | OAI identifier | `/repositories/…` URI | Preservica reference (UUID) | object number, else `__id` |
-| Abstract | `description` (thumbnail URLs moved to location/url) | `description` | `description` | `ObjBriefDescriptionClb` |
-| Title | `title` (trailing punctuation removed) | `title` | `title` | `ObjObjectTitleGrp.TitleTxt`; if none, first sentence of the description in [brackets], `supplied="yes"` |
-| Name / Role | `creator` (creator, cre); `contributor` (contributor, ctb); personal vs corporate guessed from form | `creator` | `creator` | `ObjPerAssociationRef`: "Name (dates) (Role)" split into name, date, role |
-| Type Of Resource | from MIME type in `format` (PDF → text, image/* → still image, …) | mixed material (`collection="yes"` on resources) | from file extension; folders mixed material, `collection="yes"` | three dimensional object |
-| Genre | `type` when not "text"; genre_rules.csv on collection name and format | `type` | — | `ObjClassificationVoc`; genre_rules.csv on category |
-| Subject (Topical / Name / Temporal / Geographic) | `subject` and `coverage`, split on ";" and "--"; each heading's main term classified (place, period, name or topic)² | `subject` and `coverage`, same way | `subject` | — |
-| Date Created / Display Date | `date`: year only when stored as Jan 1, otherwise full date | `date` parsed to EDTF (e.g. "c. 1934-1935" → `1934/1935`), original text kept as display date; "Date acquired" values dropped | not mapped³ | `ObjDateGrp.DateTxt`, same parsing ("Early: 1837; Late: 1901" → `1837/1901`) |
-| Language | `language` → ISO 639-2/B | `language` (codes and prose) → ISO 639-2/B | — | — |
-| Call Number | — | non-URL `identifier` values (call number, box/folder) | — | — |
-| Collection / URL (Finding Aid) | `source` (publication title) | parent collection from `relation`, linked to its ArchivesSpace page | parent folder, linked to its page | `ObjCategoryVoc` |
-| Extent / Physical Form | — (MIME type goes to internetMediaType in the XML) | `format` | — | `ObjDimAllGrp`, `ObjMaterialTechniqueGrp` |
-| Note | `relation`; "Record contributed by …" for other institutions' records | related-materials text from `relation` (resources) | — | `ObjCreditLineVoc` |
-| Repository | config `repository`; for other institutions' records, their `publisher` | config prefix + ArchivesSpace repository (`publisher`) | config `repository` | config `repository` |
-| Access / Rights Statement / License / Use | `rights` sorted: CC URLs → license label + URL; "©…" → rights statement; access or reuse wording → access or use | `rights`, same sorting | `rights` | — |
+| Abstract | `description` (thumbnail URLs moved to location/url) | `abstract` | `description` | `ObjBriefDescriptionClb` |
+| Title | `title` (trailing punctuation removed) | `titleinfo/title` | `title` | `ObjObjectTitleGrp.TitleTxt`; if none, first sentence of the description in [brackets], `supplied="yes"` |
+| Name / Role | `creator` (creator, cre); `contributor` (contributor, ctb); personal vs corporate guessed from form | `name/namePart` with `name/@type` and role (creator when none) | `creator` | `ObjPerAssociationRef`: "Name (dates) (Role)" split into name, date, role |
+| Type Of Resource | from MIME type in `format` (PDF → text, image/* → still image, …) | `typeOfResource`, else mixed material (`collection="yes"` on resources) | from file extension; folders mixed material, `collection="yes"` | three dimensional object |
+| Genre | `type` when not "text"; genre_rules.csv on collection name and format | `genre`, and `subject/genre` | — | `ObjClassificationVoc`; genre_rules.csv on category |
+| Subject (Topical / Name / Temporal / Geographic) | `subject` and `coverage`, split on ";" and "--"; each heading's main term classified (place, period, name or topic)² | `subject` headings split on "--"; a single-term element keeps its MODS type (`topic`, `geographic`, ...), longer headings are classified as for ScholarWorks | `subject` | — |
+| Date Created / Display Date | `date`: year only when stored as Jan 1, otherwise full date | `originInfo/dateCreated` (already normalized, e.g. `1965/1997`) and `oai_dc:date`, parsed to EDTF; original text kept as display date | not mapped³ | `ObjDateGrp.DateTxt`, same parsing ("Early: 1837; Late: 1901" → `1837/1901`) |
+| Language | `language` → ISO 639-2/B | `language/languageTerm[@type='code']` and `note[@type='language']` → ISO 639-2/B | — | — |
+| Call Number | — | non-URL `oai_dc:identifier` values (call number, box/folder) | — | — |
+| Collection / URL (Finding Aid) | `source` (publication title) | `relatedItem[@type='host']` (title, call number), linked to the collection's ArchivesSpace page | parent folder, linked to its page | `ObjCategoryVoc` |
+| Extent / Physical Form | — (MIME type goes to internetMediaType in the XML) | `physicalDescription/extent` | — | `ObjDimAllGrp`, `ObjMaterialTechniqueGrp` |
+| Note | `relation`; "Record contributed by …" for other institutions' records | every `note[@type=…]`, typed in the XML (biographical, acquisition, processing, related material, ...); `preferredcitation` left out (config `drop_note_types`) | — | `ObjCreditLineVoc` |
+| Repository | config `repository`; for other institutions' records, their `publisher` | config prefix + `location/physicalLocation` | config `repository` | config `repository` |
+| Access / Rights Statement / License / Use | `rights` sorted: CC URLs → license label + URL; "©…" → rights statement; access or reuse wording → access or use | `accessCondition[@type='restrictionOnAccess']` → access, `[@type='useAndReproduction']` → use (config); others sorted as for ScholarWorks | `rights` | — |
 
 ¹ The XML puts URLs at `location/url` (with `usage="primary"`), because `location/physicalLocation/url` and
 `subject/coordinates` in the template aren't valid MODS; coordinates go to `subject/cartographics/coordinates`.
@@ -89,14 +89,16 @@ Every XML record also gets `recordInfo` (source, record ID, the harvest datestam
 These come from the harvests, not the crosswalk, and limit what the MODS can say:
 
 - **Preservica** exposes only titles (often filenames such as `IMG_8810`) and a few descriptions over oai_dc. Its
-  descriptive metadata would need a richer format (its README notes MODS is offered for records that have it). The
+  OAI-PMH service offers no MODS (only `XIP` and `oai_dc`), because no records carry embedded MODS. The
   feed also lists some records several times; the crosswalk keeps the newest. There is a "Test items" folder in the feed.
 - **MuseumPlus**: `ObjObjectNumberTxt`, `ObjCreditLineVoc`, `ObjClassificationVoc` and `ObjMaterialTechniqueGrp` are
   empty in every record, `__id` is doubled ("10 || 10"), and `ObjDimAllGrp.PreviewENVrt` holds the literal text
   "PreviewENVrt". These look like field-path problems in `museumplus/fields.txt` or the harvester. About 90% of objects
   have no title, so most titles are devised from the description.
-- **ArchivesSpace** oai_dc carries subjects, agents and languages for only a small share of records; `oai_mods`
-  (offered by the endpoint) would carry more.
+- **ArchivesSpace**'s MODS (now harvested) has typed notes and access/use conditions, but no record links, call
+  numbers or box numbers and few dates, so those are merged in from oai_dc. Components (90% of records) have little
+  description in either format: title, parent collection, sometimes a date and abstract. Some subjects are typed
+  oddly in ArchivesSpace itself (e.g. "Consolidation of Schools" as a geographic term).
 - **ScholarWorks**' harvest includes about 320 records from other institutions' Digital Commons sites (their
   `publisher` isn't "UNI ScholarWorks"). The crosswalk leaves them out; set `include_external` to `true` in
   `config.json` to include them.
