@@ -1,5 +1,5 @@
 # Metadata
-Metadata exports from Rod Library systems, including Digital Commons, ArchivesSpace, MusueumPlus, Preservica, and Archive-It.
+Weekly metadata exports from Rod Library systems, including Digital Commons, ArchivesSpace, MusueumPlus, Preservica, and Archive-It.
 
 ## Contents
 
